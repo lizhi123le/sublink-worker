@@ -3,6 +3,7 @@
   "version": "2.4.2",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@9.15.4",
   "scripts": {
     "build": "node scripts/build-vercel.mjs",
     "deploy": "npm run setup-kv && wrangler deploy",
@@ -27,5 +28,12 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd",
+      "sharp"
+    ]
   }
 }
