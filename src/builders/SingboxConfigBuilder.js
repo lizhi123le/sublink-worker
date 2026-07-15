@@ -7,7 +7,7 @@ import { buildSelectorMembers as buildSelectorMemberList, buildNodeSelectMembers
 import { normalizeGroupName } from './helpers/groupNameUtils.js';
 
 export class SingboxConfigBuilder extends BaseConfigBuilder {
-    constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, singboxVersion = '1.12', includeAutoSelect = true) {
+    constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, singboxVersion = '1.14', includeAutoSelect = true) {
         const resolvedBaseConfig = baseConfig ?? SING_BOX_CONFIG;
         super(inputString, resolvedBaseConfig, lang, userAgent, groupByCountry, includeAutoSelect);
 
@@ -566,8 +566,8 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
         // the user toggles global mode (selectors only support TCP+UDP if the
         // currently selected node does, which is fragile).
         this.config.route.rules.unshift(
-            { action: 'sniff' },
-            { protocol: 'dns', action: 'hijack-dns' },
+            { inbound: ['tun-in', 'mixed-in'], action: 'sniff' },
+            { type: 'logical', mode: 'or', rules: [{ port: 53 }, { protocol: 'dns' }], action: 'hijack-dns' },
             { clash_mode: 'direct', outbound: 'DIRECT' },
             { clash_mode: 'global', outbound: this.t('outboundNames.Node Select') }
         );

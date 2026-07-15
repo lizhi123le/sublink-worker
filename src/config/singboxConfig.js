@@ -7,26 +7,33 @@ export const SING_BOX_CONFIG = {
 	dns: {
 		servers: [
 			{
-				type: "tcp",
+				tag: "local",
+				type: "local"
+			},
+			{
+				tag: "hosts",
+				type: "hosts",
+				predefined: {
+					"dns.alidns.com": ["223.5.5.5", "223.6.6.6"],
+					"dns.google": ["8.8.8.8", "8.8.4.4"]
+				}
+			},
+			{
 				tag: "dns_proxy",
-				server: "1.1.1.1",
-				detour: "🚀 节点选择",
-				domain_resolver: "dns_resolver"
-			},
-			{
 				type: "https",
+				server: "dns.google",
+				domain_resolver: "hosts",
+				detour: "🚀 节点选择"
+			},
+			{
 				tag: "dns_direct",
+				type: "https",
 				server: "dns.alidns.com",
-				domain_resolver: "dns_resolver"
+				domain_resolver: "hosts"
 			},
 			{
-				type: "udp",
-				tag: "dns_resolver",
-				server: "223.5.5.5"
-			},
-			{
+				tag: "fakeip",
 				type: "fakeip",
-				tag: "dns_fakeip",
 				inet4_range: "198.18.0.0/15",
 				inet6_range: "fc00::/18"
 			}
@@ -34,11 +41,8 @@ export const SING_BOX_CONFIG = {
 		rules: [
 			{
 				rule_set: "geolocation-!cn",
-				query_type: [
-					"A",
-					"AAAA"
-				],
-				server: "dns_fakeip"
+				query_type: ["A", "AAAA"],
+				server: "fakeip"
 			},
 			{
 				rule_set: "geolocation-!cn",
@@ -46,17 +50,14 @@ export const SING_BOX_CONFIG = {
 				server: "dns_proxy"
 			},
 			{
-				query_type: [
-					"A",
-					"AAAA",
-					"CNAME"
-				],
+				query_type: ["A", "AAAA", "CNAME"],
 				invert: true,
-				action: "predefined",
-				rcode: "REFUSED"
+				server: "dns_direct",
+				disable_cache: true
 			}
 		],
-		final: "dns_direct"
+		final: "dns_direct",
+		strategy: "prefer_ipv4"
 	},
 	ntp: {
 		enabled: true,
@@ -65,28 +66,63 @@ export const SING_BOX_CONFIG = {
 		interval: '30m'
 	},
 	inbounds: [
-		{ type: 'mixed', tag: 'mixed-in', listen: '0.0.0.0', listen_port: 2080 },
-		{ type: 'tun', tag: 'tun-in', address: '172.19.0.1/30', auto_route: true, strict_route: true, stack: 'mixed' }
+		{
+			type: 'mixed',
+			tag: 'mixed-in',
+			listen: '127.0.0.1',
+			listen_port: 7890
+		},
+		{
+			type: 'tun',
+			tag: 'tun-in',
+			address: [
+				'172.19.0.0/30',
+				'fdfe:dcba:9876::0/126'
+			],
+			auto_route: true,
+			strict_route: true,
+			stack: 'system'
+		}
 	],
 	outbounds: [
 		{ type: "direct", tag: 'DIRECT' }
 	],
+	http_clients: [
+		{
+			tag: "default",
+			detour: "🚀 节点选择"
+		},
+		{
+			tag: "direct",
+			detour: "DIRECT"
+		}
+	],
 	route: {
-		default_domain_resolver: "dns_resolver",
-		"rule_set": [
+		default_domain_resolver: "local",
+		auto_detect_interface: true,
+		rule_set: [
 			{
-				"tag": "geosite-geolocation-!cn",
-				"type": "local",
-				"format": "binary",
-				"path": "geosite-geolocation-!cn.srs"
+				tag: "geosite-geolocation-!cn",
+				type: "remote",
+				format: "binary",
+				url: "https://gh-proxy.com/raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/geolocation-!cn.srs"
 			}
 		],
 		rules: []
 	},
 	experimental: {
+		clash_api: {
+			external_controller: "0.0.0.0:9090",
+			external_ui: "ui",
+			secret: "",
+			external_ui_download_url: "https://gh-proxy.com/https://github.com/Zephyruso/zashboard/archive/refs/heads/gh-pages.zip",
+			external_ui_download_detour: "DIRECT",
+			default_mode: "rule"
+		},
 		cache_file: {
 			enabled: true,
-			store_fakeip: true
+			store_fakeip: true,
+			store_dns: true
 		}
 	}
 };
