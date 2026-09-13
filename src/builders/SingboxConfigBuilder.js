@@ -21,7 +21,11 @@ const DIRECT_OUTBOUND_TAG = 'DIRECT';
 // depend on the proxy whose own address still needs to be resolved.
 const REMOTE_DNS_SERVER_TYPES = new Set(['udp', 'tcp', 'tls', 'https', 'quic', 'h3']);
 
-const isDirectDetour = (detour) => typeof detour === 'string' && detour.trim().toUpperCase() === DIRECT_OUTBOUND_TAG;
+// sing-box rejects an http_client detour that points at a direct outbound without
+// options ("detour to an empty direct outbound makes no sense") and omitting the
+// detour already dials directly, so such detours have to be dropped.
+const isEmptyDirectOutbound = (outbound) => outbound?.type === 'direct'
+    && Object.keys(outbound).every(key => key === 'type' || key === 'tag');
 
 export class SingboxConfigBuilder extends BaseConfigBuilder {
     constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, singboxVersion = '1.14', includeAutoSelect = true) {
@@ -460,6 +464,25 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
     }
 
     /**
+     * Drop http_client detours that point at an option-less direct outbound.
+     * sing-box refuses them at dial time ("detour to an empty direct outbound
+     * makes no sense") and the direct dialer is the default anyway, so legacy
+     * templates carrying `detour: "DIRECT"` must not survive into the output.
+     */
+    sanitizeHttpClientDetours() {
+        const clients = this.config.http_clients;
+        if (!Array.isArray(clients)) return;
+
+        clients.forEach(client => {
+            if (!client?.detour) return;
+            const outbound = (this.config.outbounds || []).find(item => item?.tag === client.detour);
+            if (isEmptyDirectOutbound(outbound)) {
+                delete client.detour;
+            }
+        });
+    }
+
+    /**
      * Pin remote rule-set downloads to DIRECT. Both the implicit default HTTP
      * client (<= 1.13) and the first `http_clients` entry connect through a proxy
      * outbound, which cannot work before that proxy resolves its own server
@@ -483,11 +506,14 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
         remoteRuleSets.forEach(ruleSet => {
             delete ruleSet.download_detour;
         });
+        this.sanitizeHttpClientDetours();
 
         if (this.config.route.default_http_client) return;
 
+        // A client without a detour dials directly, which is what a rule-set
+        // download needs: `detour: "DIRECT"` is rejected by sing-box at dial time.
         const clients = Array.isArray(this.config.http_clients) ? this.config.http_clients : [];
-        const directClient = clients.find(client => client?.tag && isDirectDetour(client.detour));
+        const directClient = clients.find(client => client?.tag && !client.detour);
         if (directClient) {
             this.config.route.default_http_client = directClient.tag;
             return;
@@ -501,7 +527,7 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
             suffix += 1;
         }
 
-        this.config.http_clients = [...clients, { tag, detour: DIRECT_OUTBOUND_TAG }];
+        this.config.http_clients = [...clients, { tag }];
         this.config.route.default_http_client = tag;
     }
 

@@ -97,8 +97,9 @@ export const SING_BOX_CONFIG = {
 			detour: "🚀 节点选择"
 		},
 		{
-			tag: "direct",
-			detour: "DIRECT"
+			// No detour: omitting it already dials directly, while pointing it at
+			// the option-less DIRECT outbound is rejected by sing-box at dial time.
+			tag: "direct"
 		}
 	],
 	route: {

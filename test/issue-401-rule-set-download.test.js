@@ -30,7 +30,7 @@ const buildWithVersion = async (singboxVersion, baseConfig = null) => {
 };
 
 describe('sing-box 1.14 remote rule-set downloads', () => {
-    it('uses the DIRECT shared HTTP client on the 1.14 tier', async () => {
+    it('uses the shared detour-less HTTP client on the 1.14 tier', async () => {
         const result = await buildWithVersion('1.14');
 
         result.route.rule_set.forEach(ruleSet => {
@@ -38,20 +38,40 @@ describe('sing-box 1.14 remote rule-set downloads', () => {
             expect(ruleSet).not.toHaveProperty('http_client');
         });
 
+        // `detour: "DIRECT"` is rejected by sing-box at dial time
+        // ("detour to an empty direct outbound makes no sense"), so the client
+        // used for downloads must simply omit the detour.
         expect(result.route.default_http_client).toBe('direct');
         expect(result.http_clients).toEqual([
             { tag: 'default', detour: '🚀 节点选择' },
-            { tag: 'direct', detour: 'DIRECT' }
+            { tag: 'direct' }
         ]);
     });
 
-    it('creates a dedicated DIRECT client when the base config has none', async () => {
+    it('strips a legacy empty-direct detour from the base config', async () => {
+        const baseConfig = cloneConfig(SING_BOX_CONFIG);
+        baseConfig.http_clients = [
+            { tag: 'default', detour: '🚀 节点选择' },
+            { tag: 'direct', detour: 'DIRECT' }
+        ];
+
+        const result = await buildWithVersion('1.14', baseConfig);
+
+        expect(result.http_clients).toEqual([
+            { tag: 'default', detour: '🚀 节点选择' },
+            { tag: 'direct' }
+        ]);
+        expect(result.route.default_http_client).toBe('direct');
+    });
+
+    it('creates a dedicated detour-less client when the base config has none', async () => {
         const baseConfig = cloneConfig(SING_BOX_CONFIG);
         delete baseConfig.http_clients;
 
         const result = await buildWithVersion('1.14', baseConfig);
 
-        expect(result.http_clients).toEqual([{ tag: 'rule-set-download', detour: 'DIRECT' }]);
+        expect(result.http_clients).toEqual([{ tag: 'rule-set-download' }]);
+        expect(result.http_clients[0]).not.toHaveProperty('detour');
         expect(result.route.default_http_client).toBe('rule-set-download');
     });
 
