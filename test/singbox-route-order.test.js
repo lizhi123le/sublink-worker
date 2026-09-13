@@ -17,12 +17,19 @@ describe('sing-box route.rules: hijack-dns precedes clash_mode rules', () => {
         const result = await builder.build();
         const rules = result.route.rules;
 
-        const dnsHijackIdx = rules.findIndex(r => r.action === 'hijack-dns' && r.protocol === 'dns');
+        const dnsHijackIdx = rules.findIndex(r => r.action === 'hijack-dns');
         const firstClashModeIdx = rules.findIndex(r => r.clash_mode);
 
         expect(dnsHijackIdx).toBeGreaterThanOrEqual(0);
         expect(firstClashModeIdx).toBeGreaterThanOrEqual(0);
         expect(dnsHijackIdx).toBeLessThan(firstClashModeIdx);
+
+        // The hijack must cover plain port 53 as well as sniffed DNS, otherwise
+        // DNS escapes into a selector when protocol sniffing has not run yet.
+        const dnsRule = rules[dnsHijackIdx];
+        expect(dnsRule.type).toBe('logical');
+        expect(dnsRule.mode).toBe('or');
+        expect(dnsRule.rules).toEqual(expect.arrayContaining([{ port: 53 }, { protocol: 'dns' }]));
     });
 
     it('sniff action is present and precedes hijack-dns', async () => {

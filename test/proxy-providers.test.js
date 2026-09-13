@@ -110,7 +110,7 @@ describe('Auto Proxy Providers Detection', () => {
     });
 
     describe('Sing-Box Builder', () => {
-        it('should use Sing-Box URL as outbound_provider when format is Sing-Box JSON', async () => {
+        it('should inline Sing-Box URL subscription nodes instead of emitting outbound_providers', async () => {
             // Mock fetchSubscriptionWithFormat to return Sing-Box format
             fetchSubscriptionWithFormat.mockResolvedValue({
                 content: mockSingboxJson,
@@ -129,18 +129,16 @@ describe('Auto Proxy Providers Detection', () => {
             await builder.build();
             const config = builder.config;
 
-            // Should have outbound_providers
-            expect(config.outbound_providers).toBeDefined();
-            expect(config.outbound_providers).toHaveLength(1);
-            const provider = config.outbound_providers[0];
-            expect(provider.tag).toMatch(/^_auto_provider_[a-z0-9]+$/);
-            expect(provider.download_url).toBe('https://example.com/singbox-sub?token=xxx');
-            expect(provider.type).toBe('http');
-            expect(provider.path).toBe(`./providers/${provider.tag}.json`);
+            // sing-box has no provider concept: strict decoding would reject the config
+            expect(config.outbound_providers).toBeUndefined();
+            expect(config.outbounds.every(outbound => outbound.providers === undefined)).toBe(true);
 
-            // outbounds should have 'providers' field
+            // Nodes are inlined as regular outbounds instead
+            const proxyTags = config.outbounds.filter(o => o.server).map(o => o.tag);
+            expect(proxyTags).toEqual(expect.arrayContaining(['SS-HK', 'SS-JP']));
+
             const nodeSelect = config.outbounds.find(o => o.tag === '🚀 节点选择');
-            expect(nodeSelect.providers).toContain(provider.tag);
+            expect(nodeSelect.outbounds).toEqual(expect.arrayContaining(['SS-HK', 'SS-JP']));
         });
 
         it('should parse and convert Clash URL (incompatible format)', async () => {
@@ -300,7 +298,7 @@ describe('Auto Proxy Providers Detection', () => {
             expect(first).toBe(second);
         });
 
-        it('should generate distinct stable Sing-Box provider paths across separate builds', async () => {
+        it('should not emit provider fields for separate Sing-Box URL subscriptions', async () => {
             fetchSubscriptionWithFormat.mockImplementation((url) => Promise.resolve({
                 content: mockSingboxJson,
                 format: 'singbox',
@@ -326,13 +324,14 @@ describe('Auto Proxy Providers Detection', () => {
 
             const firstConfig = await firstBuilder.build();
             const secondConfig = await secondBuilder.build();
-            const firstProvider = firstConfig.outbound_providers[0];
-            const secondProvider = secondConfig.outbound_providers[0];
 
-            expect(firstProvider.tag).not.toBe(secondProvider.tag);
-            expect(firstProvider.path).not.toBe(secondProvider.path);
-            expect(firstProvider.path).toBe(`./providers/${firstProvider.tag}.json`);
-            expect(secondProvider.path).toBe(`./providers/${secondProvider.tag}.json`);
+            for (const config of [firstConfig, secondConfig]) {
+                expect(config.outbound_providers).toBeUndefined();
+                expect(config.outbounds.every(outbound => outbound.providers === undefined)).toBe(true);
+                expect(config.outbounds.filter(o => o.server).map(o => o.tag)).toEqual(
+                    expect.arrayContaining(['SS-HK', 'SS-JP'])
+                );
+            }
         });
     });
 
@@ -376,7 +375,7 @@ describe('Auto Proxy Providers Detection', () => {
             expect(nodeSelect.use).toContain(autoProviderName);
         });
 
-        it('should merge user-defined Sing-Box outbound_providers with auto providers', async () => {
+        it('should strip user-defined Sing-Box outbound_providers from the base config', async () => {
             fetchSubscriptionWithFormat.mockResolvedValue({
                 content: mockSingboxJson,
                 format: 'singbox',
@@ -393,6 +392,9 @@ describe('Auto Proxy Providers Detection', () => {
                     download_interval: '24h'
                 }
             ];
+            baseConfig.outbounds = baseConfig.outbounds.map(outbound => (
+                outbound.type === 'direct' ? { ...outbound, providers: ['user-provider'] } : outbound
+            ));
 
             const builder = new SingboxConfigBuilder(
                 'https://auto.example.com/singbox-sub',
@@ -404,16 +406,12 @@ describe('Auto Proxy Providers Detection', () => {
             );
             const config = await builder.build();
 
-            expect(config.outbound_providers).toBeDefined();
-            expect(config.outbound_providers).toHaveLength(2);
-            expect(config.outbound_providers.map(p => p.tag)).toContain('user-provider');
-            const autoProvider = config.outbound_providers
-                .find(provider => provider.tag.startsWith('_auto_provider_'));
-            expect(autoProvider.download_url).toBe('https://auto.example.com/singbox-sub');
+            // sing-box rejects both fields as unknown, so neither may survive
+            expect(config.outbound_providers).toBeUndefined();
+            expect(config.outbounds.every(outbound => outbound.providers === undefined)).toBe(true);
 
             const nodeSelect = config.outbounds.find(o => o.tag === '🚀 节点选择');
-            expect(nodeSelect.providers).toContain('user-provider');
-            expect(nodeSelect.providers).toContain(autoProvider.tag);
+            expect(nodeSelect.outbounds).toEqual(expect.arrayContaining(['SS-HK', 'SS-JP']));
         });
     });
 });

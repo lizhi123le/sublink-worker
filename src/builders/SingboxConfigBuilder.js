@@ -6,7 +6,22 @@ import { addProxyWithDedup } from './helpers/proxyHelpers.js';
 import { buildSelectorMembers as buildSelectorMemberList, buildNodeSelectMembers, buildCustomRuleMembers, uniqueNames } from './helpers/groupBuilder.js';
 import { normalizeGroupName } from './helpers/groupNameUtils.js';
 
+// Feature tiers, oldest to newest. Each tier only adds or drops fields, and a
+// client rejects any field it does not know as an unknown-field error.
+const TIER_ORDER = ['1.11', '1.12', '1.14', '1.15'];
+const normalizeTier = (tier) => (TIER_ORDER.includes(tier) ? tier : '1.12');
+const tierAtLeast = (tier, minimum) => TIER_ORDER.indexOf(tier) >= TIER_ORDER.indexOf(minimum);
+
 const RULE_SET_HTTP_CLIENT_TAG = 'rule-set-download';
+const PROXY_DNS_SERVER_TAG = 'dns_proxy';
+const DIRECT_OUTBOUND_TAG = 'DIRECT';
+
+// Only these DNS servers dial an upstream through an outbound, so only they can
+// carry a detour; setting it on local/hosts/fakeip makes system resolution
+// depend on the proxy whose own address still needs to be resolved.
+const REMOTE_DNS_SERVER_TYPES = new Set(['udp', 'tcp', 'tls', 'https', 'quic', 'h3']);
+
+const isDirectDetour = (detour) => typeof detour === 'string' && detour.trim().toUpperCase() === DIRECT_OUTBOUND_TAG;
 
 export class SingboxConfigBuilder extends BaseConfigBuilder {
     constructor(inputString, selectedRules, customRules, baseConfig, lang, userAgent, groupByCountry = false, enableClashUI = false, externalController, externalUiDownloadUrl, singboxVersion = '1.14', includeAutoSelect = true) {
@@ -20,72 +35,71 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
         this.enableClashUI = enableClashUI;
         this.externalController = externalController;
         this.externalUiDownloadUrl = externalUiDownloadUrl;
-        this.singboxVersion = singboxVersion;  // '1.11', '1.12' or '1.14'
+        this.singboxVersion = normalizeTier(singboxVersion);  // '1.11' | '1.12' | '1.14' | '1.15'
 
-        if (this.config?.dns?.servers?.length > 0) {
-            this.config.dns.servers[0].detour = this.t('outboundNames.Node Select');
-        }
+        this.stripProviderFields();
+        this.applyVersionCompatibility();
+        this.configureProxyDnsDetour();
     }
 
     /**
-     * Check if subscription format is compatible for use as Sing-Box outbound_provider
-     * Only available in Sing-Box 1.12+
-     * @param {'clash'|'singbox'|'unknown'} format - Detected subscription format
-     * @returns {boolean} - True if format is Sing-Box JSON and version supports providers
+     * Drop fields older sing-box versions reject as unknown: strict JSON decoding
+     * fails the whole config, so one shared modern template cannot carry them.
      */
-    isCompatibleProviderFormat(format) {
-        // outbound_providers only supported in Sing-Box 1.12+
-        if (this.singboxVersion === '1.11') {
-            return false;
-        }
-        return format === 'singbox';
-    }
-
-    /**
-     * Generate outbound_providers configuration from collected URLs
-     * @returns {object[]} - Array of outbound provider objects
-     */
-    generateOutboundProviders() {
-        const existingTags = this.getExistingProviderTags();
-        return this.getAutoProviderDescriptors(existingTags).map(({ name, url }) => ({
-            tag: name,
-            type: 'http',
-            download_url: url,
-            path: `./providers/${name}.json`,
-            download_interval: '24h',
-            health_check: {
-                enabled: true,
-                url: 'https://www.gstatic.com/generate_204',
-                interval: '5m'
+    applyVersionCompatibility() {
+        if (!tierAtLeast(this.singboxVersion, '1.14')) {
+            delete this.config.http_clients;
+            if (this.config.route) {
+                delete this.config.route.default_http_client;
             }
-        }));
-    }
-
-    /**
-     * Get list of provider tags
-     * @returns {string[]} - Array of provider tags
-     */
-    getProviderTags() {
-        return this.getAutoProviderDescriptors(this.getExistingProviderTags()).map(provider => provider.name);
-    }
-
-    getExistingProviderTags() {
-        return Array.isArray(this.config.outbound_providers)
-            ? this.config.outbound_providers.map(p => p?.tag).filter(Boolean)
-            : [];
-    }
-
-    /**
-     * Get all provider tags (user-defined + auto-generated)
-     * @returns {string[]} - Array of provider tags
-     */
-    getAllProviderTags() {
-        if (this.singboxVersion === '1.11') {
-            return [];
+            if (this.config.experimental?.cache_file) {
+                delete this.config.experimental.cache_file.store_dns;
+            }
         }
-        const existingTags = this.getExistingProviderTags();
-        const autoTags = this.getProviderTags();
-        return [...new Set([...existingTags, ...autoTags])];
+
+        if (tierAtLeast(this.singboxVersion, '1.15')) {
+            // 1.15 replaced the tun stack option with sing-tun's own stack: keeping
+            // it only warns on 1.15 and needs ENABLE_DEPRECATED_TUN_STACK on 1.16.
+            (this.config.inbounds || []).forEach(inbound => {
+                if (inbound?.type === 'tun') {
+                    delete inbound.stack;
+                }
+            });
+        }
+    }
+
+    /**
+     * Point the proxy DNS server at the node selector. local/hosts/fakeip stay
+     * untouched: routing them through a proxy re-enters DNS resolution for that
+     * proxy's own domain, which surfaces as startup "lookup <node domain>:
+     * context deadline exceeded" and stalls rule-set initialization.
+     */
+    configureProxyDnsDetour() {
+        const servers = this.config?.dns?.servers;
+        if (!Array.isArray(servers) || servers.length === 0) return;
+
+        const target = servers.find(server => server?.tag === PROXY_DNS_SERVER_TAG)
+            ?? servers.find(server => REMOTE_DNS_SERVER_TYPES.has(server?.type))
+            // Legacy servers (sing-box <= 1.11) are identified by address only.
+            ?? servers.find(server => server?.type === undefined);
+
+        if (target) {
+            target.detour = this.t('outboundNames.Node Select');
+        }
+    }
+
+    /**
+     * sing-box has no provider concept: neither `outbound_providers` nor a group
+     * `providers` field exists in its schema, and strict decoding rejects the
+     * whole config with "json: unknown field". Subscription content is always
+     * inlined as regular outbounds, so drop anything a stored base config
+     * (or an outdated UI state) still carries.
+     */
+    stripProviderFields() {
+        delete this.config.outbound_providers;
+        (this.config.outbounds || []).forEach(outbound => {
+            delete outbound.providers;
+        });
     }
 
     getProxies() {
@@ -148,7 +162,7 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
     }
 
     hasAutoSelectCandidates(proxyList = this.getProxyList()) {
-        return (Array.isArray(proxyList) && proxyList.length > 0) || this.getAllProviderTags().length > 0;
+        return Array.isArray(proxyList) && proxyList.length > 0;
     }
 
     addAutoSelectGroup(proxyList) {
@@ -156,22 +170,14 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
         this.config.outbounds = this.config.outbounds || [];
         const tag = this.t('outboundNames.Auto Select');
         if (this.hasOutboundTag(tag)) return;
-        const providerTags = this.getAllProviderTags();
         const autoSelectMembers = deepCopy(uniqueNames(proxyList));
-        if (autoSelectMembers.length === 0 && providerTags.length === 0) return;
+        if (autoSelectMembers.length === 0) return;
 
-        const group = {
+        this.config.outbounds.unshift({
             type: "urltest",
             tag,
             outbounds: autoSelectMembers
-        };
-
-        // Add 'providers' field if we have outbound_providers
-        if (providerTags.length > 0) {
-            group.providers = providerTags;
-        }
-
-        this.config.outbounds.unshift(group);
+        });
     }
 
     addNodeSelectGroup(proxyList) {
@@ -189,19 +195,11 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
             includeReject: false
         });
 
-        const group = {
+        this.config.outbounds.unshift({
             type: "selector",
             tag,
             outbounds: members
-        };
-
-        // Add 'providers' field if we have outbound_providers
-        const providerTags = this.getAllProviderTags();
-        if (providerTags.length > 0) {
-            group.providers = providerTags;
-        }
-
-        this.config.outbounds.unshift(group);
+        });
     }
 
     buildSelectorMembers(proxyList = []) {
@@ -334,15 +332,13 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
 
     /**
      * Merge user-defined proxy groups (selector/urltest outbounds) with system-generated ones
-     * Handles same-tag groups by merging outbounds/providers fields
+     * Handles same-tag groups by merging their outbounds
      * @param {Array} userGroups - User-defined proxy groups from input config (converted to Clash format)
      */
     mergeUserProxyGroups(userGroups) {
         if (!Array.isArray(userGroups)) return;
 
         const proxyList = this.getProxyList();
-        const validProxyTags = new Set(proxyList);
-        const allProviderTags = new Set(this.getAllProviderTags());
 
         // Build valid reference set (proxy tags, group tags, special names)
         const groupTags = new Set(
@@ -366,15 +362,6 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
             if (existingIndex >= 0) {
                 // Merge with existing system group
                 const existing = this.config.outbounds[existingIndex];
-
-                // Merge 'providers' field (Sing-Box uses 'providers' not 'use')
-                if (Array.isArray(userGroup.use) && userGroup.use.length > 0) {
-                    const validUserProviders = userGroup.use.filter(p => allProviderTags.has(p));
-                    existing.providers = [...new Set([
-                        ...(existing.providers || []),
-                        ...validUserProviders
-                    ])];
-                }
 
                 // Merge 'outbounds' field (equivalent to Clash 'proxies')
                 if (Array.isArray(userGroup.proxies) && userGroup.proxies.length > 0) {
@@ -402,16 +389,8 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
                     newOutbound.outbounds = userGroup.proxies.filter(p => validRefs.has(p));
                 }
 
-                // Validate providers references
-                if (Array.isArray(userGroup.use)) {
-                    const validProviders = userGroup.use.filter(p => allProviderTags.has(p));
-                    if (validProviders.length > 0) {
-                        newOutbound.providers = validProviders;
-                    }
-                }
-
-                // Only add if has valid outbounds or providers
-                if ((newOutbound.outbounds?.length > 0) || (newOutbound.providers?.length > 0)) {
+                // Only add if it references something sing-box can actually dial
+                if (newOutbound.outbounds?.length > 0) {
                     this.config.outbounds.push(newOutbound);
                 }
             }
@@ -424,22 +403,15 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
      */
     validateOutbounds() {
         const proxyList = this.getProxyList();
-        const providerTags = this.getAllProviderTags();
         const invalidTags = new Set();
 
         (this.config.outbounds || []).forEach(outbound => {
-            // For urltest groups, ensure they have outbounds or providers
+            // For urltest groups, ensure they have outbounds
             if (outbound.type === 'urltest' &&
-                (!outbound.outbounds || outbound.outbounds.length === 0) &&
-                (!outbound.providers || outbound.providers.length === 0)) {
+                (!outbound.outbounds || outbound.outbounds.length === 0)) {
                 // Fill with all available proxy tags
                 outbound.outbounds = [...proxyList];
-                // Also use all providers if available
-                if (providerTags.length > 0) {
-                    outbound.providers = [...providerTags];
-                }
-                if ((!outbound.outbounds || outbound.outbounds.length === 0) &&
-                    (!outbound.providers || outbound.providers.length === 0)) {
+                if (!outbound.outbounds || outbound.outbounds.length === 0) {
                     invalidTags.add(normalizeGroupName(outbound.tag));
                 }
             }
@@ -476,7 +448,7 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
             })
             .filter(outbound => {
                 if (outbound?.type !== 'selector' && outbound?.type !== 'urltest') return true;
-                return outbound.outbounds?.length > 0 || outbound.providers?.length > 0;
+                return outbound.outbounds?.length > 0;
             });
     }
 
@@ -488,28 +460,49 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
     }
 
     /**
-     * Pin remote rule-set downloads to DIRECT so fetching never depends on a
-     * proxy that may not be up yet (issue #408). sing-box 1.14 deprecates both
-     * the implicit default HTTP client and the download_detour field (removed
-     * in 1.16, issue #401), so >=1.14 gets an explicit shared HTTP client
-     * while older versions get the legacy per-rule-set field.
+     * Pin remote rule-set downloads to DIRECT. Both the implicit default HTTP
+     * client (<= 1.13) and the first `http_clients` entry connect through a proxy
+     * outbound, which cannot work before that proxy resolves its own server
+     * domain, so startup lookups deadlock. sing-box 1.14 replaced
+     * `download_detour` with `http_clients` + `route.default_http_client`; older
+     * clients reject those two as unknown fields.
      */
     configureRuleSetDownload() {
-        if (this.singboxVersion === '1.14') {
-            if (this.config.route.default_http_client) {
-                return;
-            }
-            if (!Array.isArray(this.config.http_clients) || this.config.http_clients.length === 0) {
-                this.config.http_clients = [{ tag: RULE_SET_HTTP_CLIENT_TAG, detour: 'DIRECT' }];
-            }
-            this.config.route.default_http_client = this.config.http_clients[0].tag;
+        const remoteRuleSets = (this.config.route?.rule_set || []).filter(ruleSet => ruleSet?.type === 'remote');
+
+        if (!tierAtLeast(this.singboxVersion, '1.14')) {
+            remoteRuleSets.forEach(ruleSet => {
+                if (!ruleSet.download_detour) {
+                    ruleSet.download_detour = DIRECT_OUTBOUND_TAG;
+                }
+            });
             return;
         }
-        this.config.route.rule_set.forEach(ruleSet => {
-            if (ruleSet?.type === 'remote' && !ruleSet.download_detour) {
-                ruleSet.download_detour = 'DIRECT';
-            }
+
+        // download_detour is deprecated in 1.14; default_http_client replaces it.
+        remoteRuleSets.forEach(ruleSet => {
+            delete ruleSet.download_detour;
         });
+
+        if (this.config.route.default_http_client) return;
+
+        const clients = Array.isArray(this.config.http_clients) ? this.config.http_clients : [];
+        const directClient = clients.find(client => client?.tag && isDirectDetour(client.detour));
+        if (directClient) {
+            this.config.route.default_http_client = directClient.tag;
+            return;
+        }
+
+        const usedTags = new Set(clients.map(client => client?.tag).filter(Boolean));
+        let tag = RULE_SET_HTTP_CLIENT_TAG;
+        let suffix = 2;
+        while (usedTags.has(tag)) {
+            tag = `${RULE_SET_HTTP_CLIENT_TAG}-${suffix}`;
+            suffix += 1;
+        }
+
+        this.config.http_clients = [...clients, { tag, detour: DIRECT_OUTBOUND_TAG }];
+        this.config.route.default_http_client = tag;
     }
 
     formatConfig() {
@@ -518,13 +511,6 @@ export class SingboxConfigBuilder extends BaseConfigBuilder {
 
         this.config.route.rule_set = [...site_rule_sets, ...ip_rule_sets];
         this.configureRuleSetDownload();
-
-        // Add outbound_providers if we have any
-        if (this.providerUrls.length > 0) {
-            const existingProviders = Array.isArray(this.config.outbound_providers) ? this.config.outbound_providers : [];
-            const newProviders = this.generateOutboundProviders();
-            this.config.outbound_providers = [...existingProviders, ...newProviders];
-        }
 
         // Validate outbounds: fill empty urltest groups with all proxies
         this.validateOutbounds();

@@ -81,12 +81,16 @@ export const SING_BOX_CONFIG = {
 			],
 			auto_route: true,
 			strict_route: true,
+			// Deprecated in sing-box 1.15 (removed in 1.17): the 1.15 tier drops it
+			// in SingboxConfigBuilder#applyVersionCompatibility.
 			stack: 'system'
 		}
 	],
 	outbounds: [
 		{ type: "direct", tag: 'DIRECT' }
 	],
+	// Since sing-box 1.14. Older clients reject these as unknown fields, so the
+	// builder strips them for the 1.11/1.12 tiers (SingboxConfigBuilder#applyVersionCompatibility).
 	http_clients: [
 		{
 			tag: "default",
@@ -122,6 +126,7 @@ export const SING_BOX_CONFIG = {
 		cache_file: {
 			enabled: true,
 			store_fakeip: true,
+			// Since sing-box 1.14 (replaces store_rdrc)
 			store_dns: true
 		}
 	}

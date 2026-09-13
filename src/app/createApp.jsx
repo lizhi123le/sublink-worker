@@ -474,8 +474,9 @@ function isSingboxLegacyConfig(version) {
     return version.minor < 12;
 }
 
-// 1.14 swaps rule-set download_detour for http_client, which older clients
-// reject as an unknown field, so it needs its own config tier.
+// 1.14 swaps rule-set download_detour for http_clients + default_http_client and
+// moved the implicit default HTTP client onto them, so it needs its own config
+// tier: older clients reject those fields as unknown.
 function isSingboxModernConfig(version) {
     if (!version || Number.isNaN(version.major) || Number.isNaN(version.minor)) {
         return false;
@@ -486,16 +487,30 @@ function isSingboxModernConfig(version) {
     return version.minor >= 14;
 }
 
+// 1.15 dropped the TUN `stack` option (deprecated in 1.15, removed in 1.17, and
+// gated behind ENABLE_DEPRECATED_TUN_STACK on the 1.16 command-line client), so
+// 1.15+ clients get the tun inbound without it.
+function isSingboxTunStackConfig(version) {
+    if (!version || Number.isNaN(version.major) || Number.isNaN(version.minor)) {
+        return false;
+    }
+    if (version.major !== 1) {
+        return version.major > 1;
+    }
+    return version.minor >= 15;
+}
+
 function resolveSingboxConfigTier(version) {
     if (isSingboxLegacyConfig(version)) return '1.11';
-    return isSingboxModernConfig(version) ? '1.14' : '1.12';
+    if (!isSingboxModernConfig(version)) return '1.12';
+    return isSingboxTunStackConfig(version) ? '1.15' : '1.14';
 }
 
 function resolveSingboxConfigVersion(requestedVersion, userAgent) {
     const normalizedRequested = typeof requestedVersion === 'string' ? requestedVersion.trim().toLowerCase() : '';
     if (normalizedRequested && normalizedRequested !== 'auto') {
         if (normalizedRequested === 'legacy') return '1.11';
-        if (normalizedRequested === 'latest') return '1.14';
+        if (normalizedRequested === 'latest') return '1.15';
         const parsed = parseSemverLike(normalizedRequested);
         if (parsed) {
             return resolveSingboxConfigTier(parsed);
