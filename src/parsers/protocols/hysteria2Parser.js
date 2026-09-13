@@ -28,7 +28,11 @@ export function parseHysteria2(url) {
         obfs.password = params['obfs-password'];
     }
 
-    const hopInterval = parseMaybeNumber(params['hop-interval']);
+    const hopInterval = parseMaybeNumber(params['hop-interval'] ?? params['hop_interval']);
+    // sing-box types up_mbps/down_mbps as int, so the raw share-link strings
+    // ("up=100") must not leak through as strings
+    const up = parseMaybeNumber(params.up) ?? parseMaybeNumber(params.upmbps);
+    const down = parseMaybeNumber(params.down) ?? parseMaybeNumber(params.downmbps);
 
     return {
         tag: name,
@@ -40,9 +44,9 @@ export function parseHysteria2(url) {
         obfs: Object.keys(obfs).length > 0 ? obfs : undefined,
         auth: params.auth,
         recv_window_conn: params.recv_window_conn,
-        up: params.up ?? (params.upmbps ? parseMaybeNumber(params.upmbps) : undefined),
-        down: params.down ?? (params.downmbps ? parseMaybeNumber(params.downmbps) : undefined),
-        ports: params.ports,
+        ...(up !== undefined ? { up } : {}),
+        ...(down !== undefined ? { down } : {}),
+        ports: params.mport || params.ports,
         hop_interval: hopInterval,
         alpn: parseArray(params.alpn),
         fast_open: parseBool(params['fast-open'])
