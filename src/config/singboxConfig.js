@@ -7,12 +7,10 @@ export const SING_BOX_CONFIG = {
 	dns: {
 		servers: [
 			{
-				// Reached directly so it can also resolve node domains: a resolver
-				// behind the proxy would need the node it is resolving. Encrypted,
-				// so the queries are not readable or spoofable on the way out.
-				type: "https",
+				type: "tcp",
 				tag: "dns_proxy",
 				server: "1.1.1.1",
+				detour: "🚀 节点选择",
 				domain_resolver: "dns_resolver"
 			},
 			{
@@ -93,7 +91,7 @@ export const SING_BOX_CONFIG = {
 		{ type: "direct", tag: 'DIRECT' }
 	],
 	route: {
-		default_domain_resolver: "dns_proxy",
+		default_domain_resolver: "dns_resolver",
 		"rule_set": [
 			{
 				"tag": "geosite-geolocation-!cn",

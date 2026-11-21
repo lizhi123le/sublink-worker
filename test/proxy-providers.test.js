@@ -137,7 +137,7 @@ describe('Auto Proxy Providers Detection', () => {
             config.outbounds.forEach(outbound => expect(outbound).not.toHaveProperty('providers'));
             // 1.12+ stamps a node resolver on every domain server (1.11 has no dial fields)
             const inlinedOutbounds = JSON.parse(mockSingboxJson).outbounds.map(outbound =>
-                version === '1.11' ? outbound : { ...outbound, domain_resolver: 'dns_proxy' }
+                version === '1.11' ? outbound : { ...outbound, domain_resolver: 'dns_resolver' }
             );
             expect(config.outbounds.filter(outbound => outbound.server)).toEqual(inlinedOutbounds);
             expect(builder.getSubscriptionUserinfo()).toBe('upload=1; download=2; total=100');

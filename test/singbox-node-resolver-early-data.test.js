@@ -107,7 +107,7 @@ describe('node domain_resolver', () => {
         ].join('\n'));
         const nodes = nodeOutbounds(config);
 
-        expect(nodes.find(node => node.server === 'node.example.com').domain_resolver).toBe('dns_proxy');
+        expect(nodes.find(node => node.server === 'node.example.com').domain_resolver).toBe('dns_resolver');
         expect(nodes.find(node => node.server === '1.2.3.4')).not.toHaveProperty('domain_resolver');
     });
 
@@ -147,14 +147,9 @@ describe('node domain_resolver', () => {
     });
 
     it('never resolves a node through a DNS server that detours into the proxy', async () => {
-        const baseConfig = cloneBaseConfig();
-        delete baseConfig.route.default_domain_resolver;
-        baseConfig.dns.servers = baseConfig.dns.servers.map(server =>
-            server.tag === 'dns_proxy' ? { ...server, detour: '🚀 节点选择' } : server
-        );
-        const config = await buildSingbox(wsLink({ path: '/a' }), { baseConfig });
+        const config = await buildSingbox(wsLink({ path: '/a' }));
 
-        // A resolver behind the node selector would need the node it resolves.
+        // dns_proxy detours through 节点选择, so it cannot bootstrap itself.
         expect(nodeOutbounds(config)[0].domain_resolver).toBe('dns_resolver');
     });
 

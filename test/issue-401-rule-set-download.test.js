@@ -63,7 +63,7 @@ describe('sing-box rule-set download detour', () => {
         // sing-box >=1.12 rejects a detour to an empty direct outbound
         const result = await buildWithVersion('1.14');
         const direct = result.outbounds.find(o => o.tag === 'DIRECT');
-        expect(direct.domain_resolver).toBe('dns_proxy');
+        expect(direct.domain_resolver).toBe('dns_resolver');
     });
 
     it('leaves the DIRECT outbound untouched on legacy tiers', async () => {
@@ -79,7 +79,7 @@ describe('sing-box rule-set download detour', () => {
         delete baseConfig.route.default_domain_resolver;
         const result = await buildWithVersion('1.14', baseConfig);
         const direct = result.outbounds.find(o => o.tag === 'DIRECT');
-        expect(direct.domain_resolver).toBe('dns_proxy');
+        expect(direct.domain_resolver).toBe('dns_resolver');
     });
 
     it('respects an existing http_clients entry from the base config on the 1.14 tier', async () => {
@@ -91,7 +91,7 @@ describe('sing-box rule-set download detour', () => {
         expect(result.http_clients).toEqual([{ tag: 'my-client', detour: 'DIRECT' }]);
         expect(result.route.default_http_client).toBe('my-client');
         const direct = result.outbounds.find(o => o.tag === 'DIRECT');
-        expect(direct.domain_resolver).toBe('dns_proxy');
+        expect(direct.domain_resolver).toBe('dns_resolver');
     });
 });
 
@@ -115,7 +115,7 @@ describe('sing-box version tier resolution', () => {
         expect(res.status).toBe(200);
         const json = await res.json();
         expect(json.route.default_http_client).toBe('rule-set-download');
-        expect(json.outbounds.find(o => o.tag === 'DIRECT').domain_resolver).toBe('dns_proxy');
+        expect(json.outbounds.find(o => o.tag === 'DIRECT').domain_resolver).toBe('dns_resolver');
     });
 
     it('returns the 1.14 shape for a sing-box 1.14 user-agent', async () => {
