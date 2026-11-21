@@ -57,7 +57,14 @@ describe.each(versions)('sing-box $version DNS fallback (issue #432)', ({ versio
             }
         ]);
         expect(policyRules).toHaveLength(5);
-        expect(config.dns.servers.find(server => server.tag === 'dns_proxy').detour).toBe('🚀 节点选择');
+        const proxyDns = config.dns.servers.find(server => server.tag === 'dns_proxy');
+        if (version === '1.11') {
+            expect(proxyDns).toMatchObject({ address: 'tls://1.1.1.1', detour: '🚀 节点选择' });
+        } else {
+            // Reached directly so node domains can be resolved through it.
+            expect(proxyDns).toMatchObject({ type: 'https', server: '1.1.1.1' });
+            expect(proxyDns.detour).toBeUndefined();
+        }
         expect(config.dns.final).toBe('dns_direct');
         expect(policyRules[4]).toEqual(version === '1.11' ? {
             query_type: ['A', 'AAAA', 'CNAME'], invert: true, server: 'dns_direct', disable_cache: true
@@ -75,7 +82,7 @@ describe.each(versions)('sing-box $version DNS fallback (issue #432)', ({ versio
                 tag: 'dns_resolver', address: '223.5.5.5', detour: 'DIRECT'
             });
         } else {
-            expect(config.route.default_domain_resolver).toBe('dns_resolver');
+            expect(config.route.default_domain_resolver).toBe('dns_proxy');
             expect(config.dns.rules.some(rule => rule.outbound)).toBe(false);
         }
     });
@@ -93,7 +100,7 @@ describe.each(versions)('sing-box $version DNS fallback (issue #432)', ({ versio
             expect(config.route).not.toHaveProperty('default_domain_resolver');
             expect(config.dns.rules[0]).toEqual({ outbound: 'any', server: 'dns_resolver' });
         } else {
-            expect(config.route.default_domain_resolver).toBe('dns_resolver');
+            expect(config.route.default_domain_resolver).toBe('dns_proxy');
         }
     });
 
@@ -149,7 +156,7 @@ describe.each(versions.filter(({ version }) => version !== '1.11'))('sing-box $v
         subscription.route = { rules: [] };
         const config = await buildConfig(version, baseConfig, ['Private'], [], JSON.stringify(subscription));
 
-        expect(config.route.default_domain_resolver).toBe('dns_resolver');
+        expect(config.route.default_domain_resolver).toBe('dns_proxy');
         expect(config.outbounds.find(outbound => outbound.tag === 'test-proxy').domain_resolver)
             .toEqual(subscription.outbounds[0].domain_resolver);
     });
@@ -166,9 +173,12 @@ describe.each(versions.filter(({ version }) => version !== '1.11'))('sing-box $v
             ...JSON.parse(sampleInput),
             route: { rules: [] },
             dns: {
-                servers: baseConfig.dns.servers.map(server =>
-                    server.tag === 'dns_resolver' ? { ...server, detour } : server
-                )
+                servers: baseConfig.dns.servers.map(server => {
+                    // Keep the direct DoH out of the way: this case is about the
+                    // legacy resolver reached through a direct outbound.
+                    if (server.tag === 'dns_proxy') return { ...server, detour: '🚀 节点选择' };
+                    return server.tag === 'dns_resolver' ? { ...server, detour } : server;
+                })
             }
         });
         const config = await buildConfig(version, customBase, ['Private'], [], input);
@@ -184,9 +194,12 @@ describe.each(versions.filter(({ version }) => version !== '1.11'))('sing-box $v
             ...JSON.parse(sampleInput),
             route: { rules: [] },
             dns: {
-                servers: baseConfig.dns.servers.map(server =>
-                    server.tag === 'dns_resolver' ? { ...server, detour: 'DIRECT' } : server
-                )
+                servers: baseConfig.dns.servers.map(server => {
+                    // Leave the legacy resolver as the only candidate, so the fake
+                    // DIRECT is what decides whether it is usable.
+                    if (server.tag === 'dns_proxy') return { ...server, detour: '🚀 节点选择' };
+                    return server.tag === 'dns_resolver' ? { ...server, detour: 'DIRECT' } : server;
+                })
             }
         });
         const config = await buildConfig(version, customBase, ['Private'], [], input);
@@ -220,7 +233,12 @@ describe.each(versions.filter(({ version }) => version !== '1.11'))('sing-box $v
             ...JSON.parse(sampleInput),
             route: { rules: [] },
             dns: {
-                servers: baseConfig.dns.servers.map(server => server.tag === 'dns_resolver' ? resolver : server)
+                servers: baseConfig.dns.servers.map(server => {
+                    if (server.tag === 'dns_resolver') return resolver;
+                    // Break the direct DoH too, so no usable bootstrap is left.
+                    if (server.tag === 'dns_proxy') return { ...server, detour: '🚀 节点选择' };
+                    return server;
+                })
             }
         });
         const config = await buildConfig(version, baseConfig, ['Private'], [], input);
